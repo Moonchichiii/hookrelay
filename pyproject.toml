@@ -7,7 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "django>=6.1,<6.2",
     "djangorestframework>=3.18,<3.19",
-    "psycopg[binary]>=3.2",
+    "psycopg[binary]>=3.3.5",
     "django-tasks-db",
     "redis>=6",
     "django-htmx",
