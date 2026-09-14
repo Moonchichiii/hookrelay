@@ -6,17 +6,25 @@ primary_region = "arn"
 
 [env]
   DJANGO_SETTINGS_MODULE = "config.settings.prod"
+  # Uvicorn trusts X-Forwarded-* only from these sources. Loopback is the
+  # fail-closed placeholder: production deployment stays blocked until the
+  # proxy trust range is established from documented Fly behaviour or a
+  # staged deployment covering the routing topology (README, "Forwarded-header
+  # trust"). Never derived from one observed request, never "*".
+  FORWARDED_ALLOW_IPS = "127.0.0.1"
 
 # Secrets set with `fly secrets set`: SECRET_KEY, DATABASE_URL, REDIS_URL, ALLOWED_HOSTS.
 
 [deploy]
-  release_command = "python manage.py migrate --noinput"
+  release_command = "/app/.venv/bin/python manage.py migrate --noinput"
 
 [processes]
-  # --proxy-headers lets Django see the original https scheme via SECURE_PROXY_SSL_HEADER.
-  web = "uvicorn config.asgi:application --host 0.0.0.0 --port 8080 --proxy-headers --forwarded-allow-ips=*"
+  # Absolute executables: the runtime image has no shell and Fly replaces CMD with
+  # these commands (ENTRYPOINT is cleared in the Dockerfile). --proxy-headers lets
+  # Django see the original scheme for sources allowed by FORWARDED_ALLOW_IPS.
+  web = "/app/.venv/bin/uvicorn config.asgi:application --host 0.0.0.0 --port 8080 --proxy-headers"
   # Idle until Drop 3 defines the first task; kept here so the topology is fixed.
-  worker = "python manage.py db_worker"
+  worker = "/app/.venv/bin/python manage.py db_worker"
 
 [http_service]
   internal_port = 8080

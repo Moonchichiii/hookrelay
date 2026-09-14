@@ -18,14 +18,13 @@ DEBUG = False
 ALLOWED_HOSTS = os.environ["ALLOWED_HOSTS"].split(",")
 CSRF_TRUSTED_ORIGINS = [f"https://{host}" for host in ALLOWED_HOSTS]
 
-# Fly terminates TLS at the edge and forwards the original scheme.
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# Uvicorn validates trusted proxy sources and supplies the ASGI scheme.
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+
 SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-# Header flag only; the domain is not submitted to the preload list by this.
 SECURE_HSTS_PRELOAD = True
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
 

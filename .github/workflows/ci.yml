@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_USER: hookrelay
           POSTGRES_PASSWORD: hookrelay
@@ -36,7 +36,7 @@ jobs:
           --health-cmd "pg_isready -U hookrelay"
           --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
-        image: redis:7
+        image: redis:7@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
@@ -47,10 +47,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Python version comes from .python-version (single source of truth).
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.11.7"
-          python-version: "3.14"
+          version: "0.12.13"
           enable-cache: true
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -64,6 +64,9 @@ jobs:
         run: |
           uv sync --locked
           bun install --frozen-lockfile
+
+      - name: Typecheck build tooling
+        run: bun run typecheck:tools
 
       - name: Build assets
         run: bun run build
@@ -119,7 +122,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
         env:
           POSTGRES_USER: hookrelay
           POSTGRES_PASSWORD: hookrelay
@@ -129,48 +132,82 @@ jobs:
           --health-cmd "pg_isready -U hookrelay"
           --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
-        image: redis:7
+        image: redis:7@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      # CI-only production configuration for the image smoke.
+      # CI-only production configuration for the final-image smoke.
       DATABASE_URL: postgresql://hookrelay:hookrelay@127.0.0.1:5432/hookrelay
       REDIS_URL: redis://127.0.0.1:6379/0
       ALLOWED_HOSTS: 127.0.0.1,localhost
+      PY: /app/.venv/bin/python
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Build image
-        run: docker build -t hookrelay:ci .
+      # The Dockerfile owns every image reference (all digest-pinned); nothing
+      # here overrides them.
+      - name: Build final image (no cache)
+        run: docker build --no-cache -t hookrelay:ci .
 
-      - name: Image runs as a non-root user
+      - name: Runtime user is 65532
+        run: test "$(docker inspect --format '{{.Config.User}}' hookrelay:ci)" = "65532"
+
+      # The runtime has no shell: everything below is either a host-side
+      # inspection of the exported rootfs or a direct interpreter invocation.
+      - name: Export runtime rootfs and inspect it on the host
         run: |
-          user="$(docker inspect --format '{{.Config.User}}' hookrelay:ci)"
-          echo "USER=$user"
-          test "$user" = "app"
+          docker create --name hookrelay-inspect hookrelay:ci
+          docker export hookrelay-inspect -o hookrelay-rootfs.tar
+          docker rm hookrelay-inspect
+          python3 scripts/inspect_rootfs.py hookrelay-rootfs.tar
 
-      - name: Migrate with the image (release command)
+      - name: Runtime executes Python 3.14.7 from the venv and imports the native stack
+        run: |
+          docker run --rm --entrypoint "$PY" hookrelay:ci -c '
+          import sys, django, psycopg, uvloop, httptools
+          version = ".".join(map(str, sys.version_info[:3]))
+          print("python", version, "executable", sys.executable)
+          assert sys.version_info[:3] == (3, 14, 7), version
+          assert sys.executable.startswith("/app/.venv/bin/"), sys.executable
+          print("imports ok:", django.__version__, psycopg.__version__, uvloop.__version__, httptools.__version__)'
+
+      - name: Migrate through the final image (release command)
         run: |
           export SECRET_KEY="$(openssl rand -base64 48)"
           docker run --rm --network host \
             -e SECRET_KEY -e DATABASE_URL -e REDIS_URL -e ALLOWED_HOSTS \
-            hookrelay:ci python manage.py migrate --noinput
+            hookrelay:ci "$PY" manage.py migrate --noinput
 
-      - name: Boot the image and probe it through the proxy contract
+      # Trust boundary: X-Forwarded-Proto is honoured only from FORWARDED_ALLOW_IPS.
+      # On the bridge network the runner reaches the container from the bridge
+      # gateway, not loopback, so the loopback default must reject the header
+      # (301 = Django saw http) and the bridge subnet must accept it (200).
+      - name: Boot the final image on the bridge network; probe livez, readyz and the trust boundary
         run: |
           export SECRET_KEY="$(openssl rand -base64 48)"
-          docker run -d --name hookrelay --network host \
-            -e SECRET_KEY -e DATABASE_URL -e REDIS_URL -e ALLOWED_HOSTS \
-            hookrelay:ci
-          for i in $(seq 1 30); do
-            if curl -fsS -H "X-Forwarded-Proto: https" http://127.0.0.1:8080/readyz; then
-              curl -fsS -o /dev/null -w "\nGET / %{http_code}\n" -H "X-Forwarded-Proto: https" http://127.0.0.1:8080/ && exit 0
-            fi
-            sleep 1
+          subnet="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Subnet}}')"
+          for allow in 127.0.0.1 "$subnet"; do
+            docker rm -f hookrelay >/dev/null 2>&1 || true
+            docker run -d --name hookrelay --add-host=host.docker.internal:host-gateway \
+              -e SECRET_KEY -e ALLOWED_HOSTS \
+              -e DATABASE_URL=postgresql://hookrelay:hookrelay@host.docker.internal:5432/hookrelay \
+              -e REDIS_URL=redis://host.docker.internal:6379/0 \
+              -e FORWARDED_ALLOW_IPS="$allow" hookrelay:ci
+            ip="$(docker inspect --format '{{.NetworkSettings.IPAddress}}' hookrelay)"
+            for i in $(seq 1 30); do curl -s -o /dev/null -H 'Host: localhost' "http://$ip:8080/livez" && break; sleep 1; done
+            code="$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost' -H 'X-Forwarded-Proto: https' "http://$ip:8080/readyz")"
+            echo "FORWARDED_ALLOW_IPS=$allow, request from the bridge gateway with X-Forwarded-Proto: https -> $code"
+            case "$allow" in
+              127.0.0.1) test "$code" = "301" ;;
+              *)
+                test "$code" = "200"
+                curl -fsS -H 'Host: localhost' -H 'X-Forwarded-Proto: https' "http://$ip:8080/livez"; echo
+                curl -fsS -H 'Host: localhost' -H 'X-Forwarded-Proto: https' "http://$ip:8080/readyz"; echo
+                curl -fsS -o /dev/null -w 'GET / %{http_code}\n' -H 'Host: localhost' -H 'X-Forwarded-Proto: https' "http://$ip:8080/" ;;
+            esac
           done
-          echo "image never became ready"; docker logs hookrelay; exit 1
 
       - name: Container logs
         if: always()

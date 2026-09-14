@@ -11,4 +11,3 @@ static/dist/*
 staticfiles/
 .env
 *.log
-.env

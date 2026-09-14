@@ -1,3 +1,5 @@
+# config/settings/dev.py
+
 import os
 
 from .base import *  # noqa: F403
@@ -15,10 +17,12 @@ DATABASES = {
         )
     )
 }
+
 REDIS_URL = os.environ.get(
     "REDIS_URL",
     "redis://127.0.0.1:56380/0",
 )
+
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",

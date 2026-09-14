@@ -1,19 +1,25 @@
+# The Dockerfile copies explicit paths; this keeps the build context itself
+# free of secrets, caches and everything the image never needs.
 .git
 .venv
 .env
 .env.*
-!.env.example
 node_modules
 static/dist
 staticfiles
 htmlcov
 .pytest_cache
 .ruff_cache
+.mypy_cache
 .coverage
 __pycache__
 *.pyc
 docs
 tests
+conftest.py
 compose.yaml
+fly.toml
 .pre-commit-config.yaml
+.gitattributes
 .github
+README.md

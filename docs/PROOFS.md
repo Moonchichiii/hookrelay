@@ -26,9 +26,18 @@ Every engineering claim the project makes is listed here with the evidence that 
 | No known vulnerability reported by `bun audit` in the locked frontend set at scan time | `security.yml`: `bun audit` | PROVEN (D00, CI gate) |
 | A vulnerability disclosed after a merge is detected without a code change | `security.yml` daily schedule; Dependabot alerts (repository setting) | PROVEN (D00, CI gate) once the schedule has run |
 | A dependency change that introduces a known vulnerability cannot be merged | `security.yml` job `dependency-review` (`fail-on-severity: low`) | PROVEN (D00, CI gate) on a public repository with the dependency graph enabled |
-| The image runs as non-root, migrates, boots and answers through the Fly proxy contract | CI job `docker` | PROVEN (D00, CI gate) |
-| No fixable CRITICAL/HIGH vulnerability reported by Trivy in the image (unfixed findings are printed, not gated) | `security.yml` job `image`, daily | PROVEN (D00, CI gate) |
-| Every GitHub Action is pinned to an immutable commit SHA under a read-only token; uv, bun and base images pinned to exact versions | `.github/workflows/*.yml`, `Dockerfile` | PROVEN (D00) — digests are added by the owner with the README command |
+| The final image migrates, boots and answers `/livez` and `/readyz` through the proxy contract | `ci.yml` job `docker` | GATE DEFINED (D00 v1.5.2); PROVEN by a green run |
+| Zero known unsuppressed CRITICAL/HIGH findings (vuln + secret, OS + library) in the final runtime image at scan time; no ignore-unfixed, no ignore file, no soft-fail | `security.yml` job `image`, daily | GATE DEFINED (D00 v1.5.2); PROVEN only by a green scan of the exact built image (the owner's local Chainguard proof image scanned 0/0 under the same policy) |
+| The final runtime rootfs has no shell, build tooling, package manager, caches, tests/docs/.env or dev packages, and zero setuid/setgid files; runs as 65532 | `scripts/inspect_rootfs.py` via `ci.yml` job `docker` (self-tested on synthetic rootfs tars) | GATE DEFINED (D00 v1.5.2); PROVEN by a green run of the Chainguard image |
+| `.python-version` is exactly 3.14.7 and the local suite runs on it | `tests/integration/test_toolchain.py` | PROVEN (D00) |
+| The final image executes Python 3.14.7 from `/app/.venv` and imports django, psycopg, uvloop, httptools | `ci.yml` job `docker` | GATE DEFINED (D00 v1.5.2); PROVEN by a green run (owner's local proof image showed the same, see LEVERANS) |
+| `X-Forwarded-Proto` is ignored from untrusted sources and honoured from `FORWARDED_ALLOW_IPS` | `ci.yml` job `docker` (bridge-network probe both ways) | GATE DEFINED (D00); PROVEN by a green run |
+| Production forwarded-header trust is a stable, documented or staged-deployment-proven boundary, never inferred from one request and never `*` | DECISIONS 29; production deploy blocked until established | OPEN — deploy blocked |
+| Every GitHub Action is pinned to an immutable commit SHA; workflow token permissions default to `contents: read`, with CodeQL alone receiving the scoped `security-events: write` it requires | `.github/workflows/*.yml` | PROVEN (D00) |
+| uv 0.12.13, bun 1.4.2 and Python 3.14.7 are pinned by exact version | `.python-version`, `Dockerfile`, workflows, `tests/integration/test_toolchain.py` | PROVEN (D00) |
+| `main` is protected by a ruleset requiring the seven checks | GitHub configuration | OPEN — owner action, not yet configured |
+| No unapproved credential-bearing URI literal exists in the tree: only explicit reviewed synthetic/local fixtures in approved contexts; loopback alone is no exemption | `tests/security/test_repository_hygiene.py` (gate + negative self-test incl. a loopback secret) | PROVEN (D00) |
+| Every repository-owned image reference is an immutable index digest (syntax and presence enforced) | `tests/security/test_image_references.py`; `Dockerfile`, `compose.yaml`, `ci.yml` | STATIC PROVEN (D00 v1.5.2); digest pinning PROVEN when this exact tree builds and passes the image gates |
 | Publishing is idempotent under concurrent identical requests | concurrency test | PLANNED (D02) |
 | Fan-out and audit entries commit atomically with the event | transaction test | PLANNED (D02) |
 | Audit chain rejects UPDATE/DELETE and verifies end to end | trigger + verify command test | PLANNED (D02) |

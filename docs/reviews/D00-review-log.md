@@ -55,3 +55,50 @@ Every finding against the D00 skeleton, its classification, and where it was res
 | uv, bun and base images floated on moving tags | design | exact versions pinned; digests by owner command, then Dependabot (v1.4) |
 | PROOFS claim wording conflated pip-audit (no ignores) with Trivy (`ignore-unfixed`) | wording | two separate, surgical rows (v1.4) |
 | `uv audit` available as defence in depth | optional | non-blocking secondary step behind the preview flag (v1.4) |
+
+## GitHub run on root commit fbae421 → v1.5 (container and toolchain)
+
+| Finding | Class | Resolution |
+|---|---|---|
+| `security / image` red: 46 fixable Debian HIGH/CRITICAL in `python:3.14.4-slim`; 2 HIGH in `/usr/bin/uv` and `/usr/bin/uvx`; uv cache in the image | BLOCKER (real gate failure, nothing suppressed) | three-stage image; uv/uvx/Bun/caches/dev deps never in the runtime; base `python:3.14.7-slim-trixie` built and scanned as-is, no apt mutation; digest pin after a clean scan (v1.5) |
+| Python drifted: Docker 3.14.4, CI "3.14", local 3.14.6, upstream 3.14.7 | design | `.python-version` = 3.14.7 as the single source; CI omits the input; Docker `ARG PYTHON_IMAGE` from the file; interpreter test locally and in the image (v1.5) |
+| uv 0.11.7 → 0.12.13 | design | verified: `uv lock --check` unchanged, 3.14.7 installable, `uv audit --all-groups` no longer valid → command corrected (v1.5) |
+| Trivy `ignore-unfixed` | design | removed; vuln + secret; image SBOM; unfixed = red until VEX (v1.5) |
+| `--forwarded-allow-ips=*` inherited without justification | security decision | `FORWARDED_ALLOW_IPS` from the environment, default loopback; both directions proven in CI; Fly value measured at first deploy (v1.5) |
+| SUID/SGID only printed | design | fail-closed allowlist gate, list measured by the owner (v1.5) |
+| `typecheck:tools` not in CI | gap | blocking step in `ci / test` before the build (v1.5) |
+| `.env.example` removed while README referenced it | gap | restored, sanitized, ports 55433/56380 (v1.5) |
+| `apt-get upgrade` and system-pip removal proposed by the implementer | rejected by review | not done: mutable mirror is not reproducible; pip removal only for a proven reason (v1.5) |
+
+## Static review of the v1.5 zip (01d684f6…) → v1.5.1
+
+| Finding | Class | Resolution |
+|---|---|---|
+| CI `--build-arg PYTHON_IMAGE=…` would override a future digest pin in the Dockerfile | BLOCKER (latent) | build-arg removed from both workflows and the README; Dockerfile owns the reference; test pins its version to `.python-version` incl. `@sha256` (v1.5.1) |
+| trivy-action v0.36.0 embeds Trivy 0.70.0 | design | `version: v0.74.0` on both invocations (v1.5.1) |
+| `docs/security/README.md` still said unfixed findings are excluded | policy contradiction | rewritten to Decision 27 (v1.5.1) |
+| PROOFS overclaimed "read-only token" and "images pinned" | wording | split into precise rows; digests GATE DEFINED (v1.5.1) |
+| SBOM generated after the fail-closed scan | ordering | SBOM + upload before the scan (v1.5.1) |
+| Fly trust range "measured from one request" | security procedure | production deploy blocked until a documented or staged-deployment-proven boundary exists (v1.5.1) |
+| GitHub secret scanning: HIGH "PostgreSQL credentials" on a parser fixture in `tests/integration/test_settings.py` (host.example.test) | false positive, structural fix | all fixture DSNs assembled at runtime (`test_settings.py`, `test_skeleton.py`), decoded password built at runtime, repository hygiene gate added with a planted-literal negative check; incident to be resolved as test fixture after push (v1.5.1) |
+
+## Owner's local image proof → v1.5.2 (runtime family selection)
+
+| Finding | Class | Resolution |
+|---|---|---|
+| `python:3.14.7-slim-trixie` unmodified: 53 HIGH + 3 CRITICAL OS findings under the fail-closed policy | runtime rejected | Debian runtime dropped (v1.5.2) |
+| Alpine reaches zero only with OS mutation plus pip removal (pip's vendored BOM as scanner noise) | rejected: mutation contradicts DECISION 25 | not adopted (v1.5.2) |
+| Chainguard `python:latest-dev` (3.14.7, glibc) → `python:latest` (65532, minimal): Trivy 0/0 for OS and Python packages with the locked Hookrelay venv transferred and django/psycopg/uvloop/httptools importing | runtime selected | four-stage Dockerfile, digest-pinned inputs, shell-less host-side inspection, zero-SUID invariant, version/digest static tests (v1.5.2) |
+| `Dockerfile.chainguard-test` was local experimentation | evidence only | not committed (v1.5.2) |
+| Hygiene gate exempted loopback hosts broadly | tightening | explicit reviewed fixture combinations in approved contexts; loopback secret negative test (v1.5.2) |
+| README/PROOFS wording: "read-only token", "same as CI", Docker rows PROVEN for a runtime no longer used, ruleset implied | precision | corrected; ruleset marked OPEN owner action (v1.5.2) |
+
+## Static review of the 1644 and 1655 v1.5.2 zips → revision 2
+
+| Finding | Class | Resolution |
+|---|---|---|
+| Inspector skipped non-regular entries before the forbidden-path check: `/bin/sh -> /bin/busybox` passed as "no shell" | BLOCKER (security gate bypass) | forbidden paths checked for every entry type; pip/pip3 and venv uv/uvx added (1655) |
+| Inspector skipped directories before the tree check and matched trailing-slash prefixes only: an empty `/app/tests`, or `/app/tests`, `/app/docs`, `/app/node_modules`, `/root/.cache` as symlinks, passed as clean | BLOCKER (security gate bypass) | tree roots without trailing slash, root itself and everything beneath rejected for every entry type before the directory skip; fourteen-case synthetic regression (revision 2) |
+| Decisions 18/20/32 contradicted 27/38/37 while all LOCKED | governance | statuses set to superseded/amended (1655) |
+| Local wall expected 200 for a plain http `/livez` under `SECURE_SSL_REDIRECT`; deploy check missing; host Trivy assumed | precision | 301, deploy check with generated key, Dockerized `aquasec/trivy:0.74.0` (1655) |
+| `fly.toml` commands relied on PATH in a shell-less image | hardening | absolute executables (1655) |

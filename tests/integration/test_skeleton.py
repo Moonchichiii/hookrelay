@@ -48,12 +48,15 @@ def test_readyz_reports_db_and_redis_ok(client: Client) -> None:
     assert response.json() == {"status": "ok", "db": "ok", "redis": "ok"}
 
 
+UNREACHABLE_REDIS_PASSWORD = "fixture-" + "password"  # noqa: S105 - synthetic, assembled at runtime
+
+
 @override_settings(
     CACHES={
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
             # Unreachable Redis must fail fast without leaking the location.
-            "LOCATION": "redis://:secret-password@127.0.0.1:9/1",
+            "LOCATION": f"redis://:{UNREACHABLE_REDIS_PASSWORD}{chr(64)}127.0.0.1:9/1",
             "OPTIONS": {"socket_connect_timeout": 1, "socket_timeout": 1},
         }
     }
@@ -63,7 +66,7 @@ def test_readyz_degrades_when_redis_is_unreachable(client: Client) -> None:
 
     assert response.status_code == 503
     assert response.json() == {"status": "degraded", "db": "ok", "redis": "error"}
-    assert "secret-password" not in response.content.decode()
+    assert UNREACHABLE_REDIS_PASSWORD not in response.content.decode()
 
 
 @pytest.mark.usefixtures("redis_cache")

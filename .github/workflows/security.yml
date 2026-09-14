@@ -22,10 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Python version comes from .python-version (single source of truth).
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: "0.11.7"
-          python-version: "3.14"
+          version: "0.12.13"
           enable-cache: true
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -61,7 +61,7 @@ jobs:
       # checks (yanked, quarantined) and may change without notice.
       - name: uv audit (secondary signal, preview, non-blocking)
         continue-on-error: true
-        run: uv audit --all-groups --preview-features audit
+        run: uv audit --preview-features audit
 
       - name: Dependency tree (evidence for remediation)
         run: uv tree --all-groups
@@ -81,18 +81,42 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Build image
-        run: docker build -t hookrelay:ci .
+      # The Dockerfile owns every image reference (all digest-pinned); nothing
+      # here overrides them.
+      - name: Build final image (no cache)
+        run: docker build --no-cache -t hookrelay:ci .
 
-      # Known CVEs with an available fix in OS packages or Python libraries block;
-      # unfixed ones are printed but cannot be acted on. Runs daily as well.
-      - name: Container vulnerability scan
+      # The SBOM is produced before the gate so it exists as evidence when the
+      # scan goes red; generating it is inventory, not vulnerability scanning.
+      # Trivy engine pinned explicitly: the action's embedded default lags
+      # upstream.
+      - name: Runtime image SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.74.0
+          image-ref: hookrelay:ci
+          format: cyclonedx
+          output: sbom-image.cdx.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-image
+          path: sbom-image.cdx.json
+
+      # Zero known unsuppressed HIGH/CRITICAL findings in the final runtime
+      # image at scan time, fixed or unfixed. No ignore file, no soft-fail.
+      # An unfixed finding keeps this red until a reviewed VEX/waiver exists.
+      # Input naming: the Trivy 0.74 CLI flag is --pkg-types, but this action
+      # exposes it as `vuln-type` and maps it to TRIVY_PKG_TYPES; do not
+      # "modernise" the key to pkg-types, the action does not accept it.
+      - name: Container vulnerability scan (fail-closed)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
           image-ref: hookrelay:ci
           format: table
           exit-code: "1"
-          ignore-unfixed: true
+          scanners: vuln,secret
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
