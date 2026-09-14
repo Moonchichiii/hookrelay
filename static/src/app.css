@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+/* Templates live outside the CSS file's directory; point the scanner at them explicitly. */
+@source "../../templates";
+@source "../../apps";

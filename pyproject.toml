@@ -1,0 +1,77 @@
+[project]
+name = "hookrelay"
+version = "0.0.0"
+description = "Webhook delivery service: transactional outbox, signed deliveries, retries, dead-letter queue."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "django>=6.1,<6.2",
+    "djangorestframework>=3.18,<3.19",
+    "psycopg[binary]>=3.2",
+    "django-tasks-db",
+    "redis>=6",
+    "django-htmx",
+    "drf-spectacular",
+    "uvicorn[standard]",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-django",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "django-stubs",
+    "pip-audit",
+    "pre-commit",
+    "djangorestframework-stubs>=3.18.1",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py"]
+testpaths = ["apps", "tests"]
+addopts = """
+--strict-config
+--strict-markers
+--cov=config
+--cov=apps
+--cov-branch
+--cov-report=term-missing:skip-covered
+--cov-fail-under=95
+"""
+# Every warning is an error. An exclusion, if one is ever needed, names the
+# exact warning and the reason next to it; there is no blanket ignore.
+filterwarnings = ["error"]
+markers = [
+    "e2e: end-to-end tests that need a running server (excluded from the default ritual)",
+    "slow: concurrency and load tests (real transactions, threads)",
+]
+
+[tool.coverage.run]
+branch = true
+omit = ["*/migrations/*", "config/wsgi.py", "config/asgi.py"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "DJ", "S"]
+per-file-ignores = { "tests/*" = ["S101"], "apps/*/tests/*" = ["S101"] }
+
+[tool.mypy]
+plugins = ["mypy_django_plugin.main"]
+strict = true
+exclude = ["migrations/"]
+files = ["config", "apps", "tests", "manage.py", "conftest.py"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings.test"

@@ -1,0 +1,18 @@
+{% load static %}<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}hookrelay{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  <script src="{% static 'htmx.min.js' %}" defer></script>
+  <script src="{% static 'alpine-csp.min.js' %}" defer></script>
+  <script src="{% static 'app.js' %}" defer></script>
+</head>
+{% comment %}htmx 4 inheritance is explicit: without :inherited the CSRF header would stop at body.{% endcomment %}
+<body class="min-h-full bg-stone-50 text-stone-900 antialiased" hx-headers:inherited='{"X-CSRFToken": "{{ csrf_token }}"}'>
+  <main class="mx-auto max-w-2xl px-6 py-16">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

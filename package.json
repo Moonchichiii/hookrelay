@@ -1,0 +1,21 @@
+{
+  "name": "hookrelay",
+  "private": true,
+  "description": "Frontend asset pipeline: Tailwind 4 build plus vendored htmx 4 and Alpine (CSP build). No bundler.",
+  "scripts": {
+    "build:css": "tailwindcss -i static/src/app.css -o static/dist/app.css --minify",
+    "watch:css": "tailwindcss -i static/src/app.css -o static/dist/app.css --watch",
+    "build:js": "bun scripts/copy-assets.ts",
+    "build": "bun run build:js && bun run build:css",
+    "htmx:check": "bun node_modules/htmx.org/dist/scripts/upgrade-check.js templates static/src apps",
+    "typecheck:tools": "tsc --project tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@alpinejs/csp": "3.17.2",
+    "@tailwindcss/cli": "4.3.3",
+    "@types/bun": "1.4.2",
+    "htmx.org": "4.0.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2"
+  }
+}

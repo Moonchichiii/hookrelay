@@ -1,0 +1,45 @@
+# Placeholder app name: change before the first `fly launch --no-deploy`.
+app = "hookrelay"
+primary_region = "arn"
+
+[build]
+
+[env]
+  DJANGO_SETTINGS_MODULE = "config.settings.prod"
+
+# Secrets set with `fly secrets set`: SECRET_KEY, DATABASE_URL, REDIS_URL, ALLOWED_HOSTS.
+
+[deploy]
+  release_command = "python manage.py migrate --noinput"
+
+[processes]
+  # --proxy-headers lets Django see the original https scheme via SECURE_PROXY_SSL_HEADER.
+  web = "uvicorn config.asgi:application --host 0.0.0.0 --port 8080 --proxy-headers --forwarded-allow-ips=*"
+  # Idle until Drop 3 defines the first task; kept here so the topology is fixed.
+  worker = "python manage.py db_worker"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["web"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/readyz"
+
+# Hashed static files are served by Fly's proxy straight from the image;
+# the app never sees /static/ requests in production.
+[[statics]]
+  guest_path = "/app/staticfiles"
+  url_prefix = "/static/"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  processes = ["web", "worker"]

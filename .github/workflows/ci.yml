@@ -1,0 +1,177 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Minimum token: nothing in this workflow writes to the repository.
+permissions:
+  contents: read
+
+# Every uv invocation asserts that uv.lock matches pyproject.toml; a stale
+# lock fails instead of being silently installed (--frozen would accept it).
+env:
+  UV_LOCKED: "1"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every action is pinned to a full commit SHA (immutable); the comment carries
+# the tag the SHA was resolved from so updates stay reviewable.
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: hookrelay
+          POSTGRES_PASSWORD: hookrelay
+          POSTGRES_DB: hookrelay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hookrelay"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://hookrelay:hookrelay@localhost:5432/hookrelay
+      REDIS_URL: redis://localhost:6379/1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.11.7"
+          python-version: "3.14"
+          enable-cache: true
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+
+      - name: Lockfile matches manifest
+        run: uv lock --check
+
+      - name: Install (locked)
+        run: |
+          uv sync --locked
+          bun install --frozen-lockfile
+
+      - name: Build assets
+        run: bun run build
+
+      - name: Hooks on the whole tree
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+
+      - name: Lint and format
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Type check (strict)
+        run: uv run mypy .
+
+      - name: htmx 4 upgrade check
+        run: bun run htmx:check
+
+      - name: Django system checks
+        run: uv run python manage.py check
+
+      - name: Production deploy checks (WARNING is a failure)
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.prod
+          ALLOWED_HOSTS: ci.hookrelay.example.test
+        run: |
+          export SECRET_KEY="$(uv run python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          uv run python manage.py check --deploy --fail-level WARNING
+
+      - name: Migrations in sync
+        run: uv run python manage.py makemigrations --check --dry-run
+
+      - name: Fresh migration against the CI database
+        run: uv run python manage.py migrate --noinput
+
+      # Fast lane, coverage floor enforced by pytest addopts. The concurrency
+      # lane (-m "slow and not e2e") is added as a job with the first slow test.
+      - name: Tests (fast lane, branch coverage >= 95%)
+        run: uv run pytest -m "not slow and not e2e"
+
+      - name: Boot smoke (uvicorn on the migrated database)
+        run: |
+          uv run uvicorn config.asgi:application --port 8000 &
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8000/readyz; then
+              curl -fsS http://127.0.0.1:8000/livez && exit 0
+            fi
+            sleep 1
+          done
+          echo "readyz never answered" && exit 1
+
+  docker:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: hookrelay
+          POSTGRES_PASSWORD: hookrelay
+          POSTGRES_DB: hookrelay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U hookrelay"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # CI-only production configuration for the image smoke.
+      DATABASE_URL: postgresql://hookrelay:hookrelay@127.0.0.1:5432/hookrelay
+      REDIS_URL: redis://127.0.0.1:6379/0
+      ALLOWED_HOSTS: 127.0.0.1,localhost
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build -t hookrelay:ci .
+
+      - name: Image runs as a non-root user
+        run: |
+          user="$(docker inspect --format '{{.Config.User}}' hookrelay:ci)"
+          echo "USER=$user"
+          test "$user" = "app"
+
+      - name: Migrate with the image (release command)
+        run: |
+          export SECRET_KEY="$(openssl rand -base64 48)"
+          docker run --rm --network host \
+            -e SECRET_KEY -e DATABASE_URL -e REDIS_URL -e ALLOWED_HOSTS \
+            hookrelay:ci python manage.py migrate --noinput
+
+      - name: Boot the image and probe it through the proxy contract
+        run: |
+          export SECRET_KEY="$(openssl rand -base64 48)"
+          docker run -d --name hookrelay --network host \
+            -e SECRET_KEY -e DATABASE_URL -e REDIS_URL -e ALLOWED_HOSTS \
+            hookrelay:ci
+          for i in $(seq 1 30); do
+            if curl -fsS -H "X-Forwarded-Proto: https" http://127.0.0.1:8080/readyz; then
+              curl -fsS -o /dev/null -w "\nGET / %{http_code}\n" -H "X-Forwarded-Proto: https" http://127.0.0.1:8080/ && exit 0
+            fi
+            sleep 1
+          done
+          echo "image never became ready"; docker logs hookrelay; exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs hookrelay || true

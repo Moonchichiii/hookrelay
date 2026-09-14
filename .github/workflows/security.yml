@@ -1,0 +1,109 @@
+name: security
+
+# Runs on every change and once a day, so a vulnerability disclosed after a
+# merge surfaces without waiting for the next commit.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_LOCKED: "1"
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.11.7"
+          python-version: "3.14"
+          enable-cache: true
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+
+      - name: Lockfile matches manifest
+        run: uv lock --check
+
+      - name: Install (locked)
+        run: |
+          uv sync --locked
+          bun install --frozen-lockfile
+
+      # uv.lock is the single source of truth; the exports exist only for the
+      # audit and carry artifact hashes so pip-audit can verify integrity.
+      # There are no --ignore-vuln flags; see docs/security/README.md.
+      - name: Audit production dependencies (hash-verified)
+        run: |
+          uv export --locked --no-dev --no-emit-project --format requirements.txt -o /tmp/requirements-prod.txt
+          uv run pip-audit --strict --require-hashes -r /tmp/requirements-prod.txt
+
+      - name: Audit all dependency groups (hash-verified)
+        run: |
+          uv export --locked --all-groups --no-emit-project --format requirements.txt -o /tmp/requirements-all.txt
+          uv run pip-audit --strict --require-hashes -r /tmp/requirements-all.txt
+
+      - name: Audit frontend dependencies
+        run: bun audit
+
+      # Secondary, OSV-backed signal behind a uv preview flag. Non-blocking on
+      # purpose: pip-audit above is the gate; this one adds adverse-status
+      # checks (yanked, quarantined) and may change without notice.
+      - name: uv audit (secondary signal, preview, non-blocking)
+        continue-on-error: true
+        run: uv audit --all-groups --preview-features audit
+
+      - name: Dependency tree (evidence for remediation)
+        run: uv tree --all-groups
+
+      # CycloneDX export is a uv preview feature (0.11): the flag acknowledges
+      # that, and uv 0.11 echoes the document to stdout as well as the file.
+      - name: Python SBOM (CycloneDX)
+        run: uv export --locked --all-groups --no-emit-project --format cyclonedx1.5 --preview-features sbom-export -o sbom-python.json > /dev/null
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-python
+          path: sbom-python.json
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build -t hookrelay:ci .
+
+      # Known CVEs with an available fix in OS packages or Python libraries block;
+      # unfixed ones are printed but cannot be acted on. Runs daily as well.
+      - name: Container vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: hookrelay:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+  # Rejects a pull request whose dependency change introduces a known
+  # vulnerability, before pip-audit ever sees the merged lock. Needs the
+  # repository's dependency graph (enabled by default on public repositories).
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: low
