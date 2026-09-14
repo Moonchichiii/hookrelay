@@ -14,7 +14,7 @@ COPY apps ./apps
 RUN bun run build
 
 # Stage 2: application image
-FROM python:3.14.4-slim AS app
+FROM python:3.14.7-slim AS app
 COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /uvx /bin/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
