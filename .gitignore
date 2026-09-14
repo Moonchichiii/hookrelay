@@ -10,4 +10,5 @@ static/dist/*
 !static/dist/.gitkeep
 staticfiles/
 .env
+.env.example
 *.log
