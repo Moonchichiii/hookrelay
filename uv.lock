@@ -525,7 +525,7 @@ requires-dist = [
     { name = "django-tasks-db" },
     { name = "djangorestframework", specifier = ">=3.18,<3.19" },
     { name = "drf-spectacular" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.5" },
     { name = "redis", specifier = ">=6" },
     { name = "uvicorn", extras = ["standard"] },
 ]
